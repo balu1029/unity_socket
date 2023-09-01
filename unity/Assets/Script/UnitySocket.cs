@@ -1,91 +1,112 @@
+using UnityEngine;
+using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using UnityEngine;
 using System.Threading;
 
-public class MyListener : MonoBehaviour
+public class TCPServer : MonoBehaviour
 {
-    Thread thread;
-    public int connectionPort = 25001;
-    TcpListener server;
-    TcpClient client;
-    bool running;
+    private TcpListener server;
+    private Thread listenerThread;
+    private bool isRunning = true;
 
-    void Start()
+    // Port to listen on
+    public int port = 12345;
+
+    // Reference to the GameObject to move
+    public Transform objectToMove;
+
+    private void Start()
     {
-        // Receive on a separate thread so Unity doesn't freeze waiting for data
-        ThreadStart ts = new ThreadStart(GetData);
-        thread = new Thread(ts);
-        thread.Start();
+        // Start the listener thread
+        listenerThread = new Thread(StartListening);
+        listenerThread.Start();
     }
 
-    void GetData()
+    private void StartListening()
     {
-        // Create the server
-        server = new TcpListener(IPAddress.Any, connectionPort);
-        server.Start();
-
-        // Create a client to get the data stream
-        client = server.AcceptTcpClient();
-
-        // Start listening
-        running = true;
-        while (running)
+        try
         {
-            Connection();
+            // Initialize the server
+            server = new TcpListener(IPAddress.Any, port);
+            server.Start();
+
+            Debug.Log("Server is listening on port " + port);
+
+            while (isRunning)
+            {
+                // Wait for a client to connect
+                TcpClient client = server.AcceptTcpClient();
+                Debug.Log("Client connected");
+
+                // Handle client communication on a separate thread
+                Thread clientThread = new Thread(() => HandleClient(client));
+                clientThread.Start();
+            }
         }
-        server.Stop();
-    }
-
-    void Connection()
-    {
-        // Read data from the network stream
-        NetworkStream nwStream = client.GetStream();
-        byte[] buffer = new byte[client.ReceiveBufferSize];
-        int bytesRead = nwStream.Read(buffer, 0, client.ReceiveBufferSize);
-
-        // Decode the bytes into a string
-        string dataReceived = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-        
-        // Make sure we're not getting an empty string
-        //dataReceived.Trim();
-        if (dataReceived != null && dataReceived != "")
+        catch (Exception e)
         {
-            // Convert the received string of data to the format we are using
-            position = ParseData(dataReceived);
-            nwStream.Write(buffer, 0, bytesRead);
+            Debug.LogError("Error: " + e.Message);
         }
     }
 
-    // Use-case specific function, need to re-write this to interpret whatever data is being sent
-    public static Vector3 ParseData(string dataString)
+    private void HandleClient(TcpClient client)
     {
-        Debug.Log(dataString);
-        // Remove the parentheses
-        if (dataString.StartsWith("(") && dataString.EndsWith(")"))
+        try
         {
-            dataString = dataString.Substring(1, dataString.Length - 2);
+            // Get the client's stream for reading and writing
+            NetworkStream stream = client.GetStream();
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+
+            while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                // Handle incoming data here
+                string message = Encoding.ASCII.GetString(buffer, 0, bytesRead);
+                Debug.Log("Received message from client: " + message);
+
+                // Parse the message as a coordinate (assuming format "x,y,z")
+                string[] coordinates = message.Split(',');
+                if (coordinates.Length == 3)
+                {
+                    float x = float.Parse(coordinates[0]);
+                    float y = float.Parse(coordinates[1]);
+                    float z = float.Parse(coordinates[2]);
+
+                    // Move the object to the specified position
+                    objectToMove.position = new Vector3(x, y, z);
+                    Debug.Log("Moved object to position: " + objectToMove.position);
+                }
+
+                // Send a response back to the client (optional)
+                string response = "Server received: " + message;
+                byte[] responseBuffer = Encoding.ASCII.GetBytes(response);
+                stream.Write(responseBuffer, 0, responseBuffer.Length);
+            }
+
+            // Close the client connection
+            client.Close();
+            Debug.Log("Client disconnected");
         }
-
-        // Split the elements into an array
-        string[] stringArray = dataString.Split(',');
-
-        // Store as a Vector3
-        Vector3 result = new Vector3(
-            float.Parse(stringArray[1]),
-            float.Parse(stringArray[2]),
-            float.Parse(stringArray[3]));
-
-        return result;
+        catch (Exception e)
+        {
+            Debug.LogError("Error handling client: " + e.Message);
+        }
     }
 
-    // Position is the data being received in this example
-    Vector3 position = Vector3.zero;
-
-    void Update()
+    private void OnApplicationQuit()
     {
-        // Set this object's position in the scene according to the position received
-        transform.position = position;
+        // Stop listening and close the server when the application quits
+        isRunning = false;
+        if (server != null)
+        {
+            server.Stop();
+        }
+
+        if (listenerThread != null && listenerThread.IsAlive)
+        {
+            listenerThread.Join();
+        }
     }
 }
